@@ -31,11 +31,21 @@ In one sentence: **whatever the OV7670 camera is pointed at, appears live on the
 
 ## 🌟 Demo
 
+### Example 1 — Phone Screen (Puppy Photo)
+
 | Camera + Board Setup (Input Side) | VGA Monitor Output (Live Feed) |
 | :---: | :---: |
 | ![Hardware setup](docs/hardware-setup.png) | ![VGA output](docs/vga-output.png) |
 
-*(Photos: ZedBoard connected to the OV7670 camera via jumper wires, and VGA cable running to a monitor. The right-hand photo shows the monitor actually displaying what the camera sees, live.)*
+*(ZedBoard connected to the OV7670 camera via jumper wires, VGA cable running to a monitor. A phone displaying a puppy photo was held in front of the camera; the right-hand photo shows the monitor displaying that live feed.)*
+
+### Example 2 — Handwritten Notes on Paper
+
+| Camera + Board Setup (Input Side) | VGA Monitor Output (Live Feed) |
+| :---: | :---: |
+| ![Hardware setup 2](docs/hardware-setup-2.png) | ![VGA output handwriting](docs/vga-output-handwriting.png) |
+
+*(Same setup — ZedBoard, OV7670 camera, VGA cable to monitor. This time the camera was pointed at a handwritten note (columns labeled `name`, `age`, `salary`), and the VGA output shows the live capture of the page, confirming the pipeline reproduces fine text detail, not just blocks of color.)*
 
 ---
 
