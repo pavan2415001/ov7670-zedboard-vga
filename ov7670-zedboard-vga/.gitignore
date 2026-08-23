@@ -1,0 +1,31 @@
+# Vivado project artifacts
+*.jou
+*.log
+*.str
+*.xpr
+.Xil/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.srcs/sources_1/ip/
+*.gen/
+NA/
+vivado*.backup.jou
+vivado*.backup.log
+webtalk*.jou
+webtalk*.log
+usage_statistics_webtalk.html
+usage_statistics_webtalk.xml
+
+# Bitstreams / reports (usually too large / regenerated)
+*.bit
+*.bin
+*.mcs
+*.ltx
+*.rpt
+
+# OS files
+.DS_Store
+Thumbs.db
