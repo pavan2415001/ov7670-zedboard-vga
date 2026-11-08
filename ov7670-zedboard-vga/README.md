@@ -1,240 +1,340 @@
-# 📷 OV7670 Camera to VGA Interface on Xilinx ZedBoard (Zynq-7000)
+# OV7670 Camera to VGA on the Xilinx ZedBoard (Zynq-7000)
 
-![Verilog](https://img.shields.io/badge/Language-Verilog-blue.svg)
-![FPGA](https://img.shields.io/badge/FPGA-Xilinx%20ZedBoard%20(XC7Z020)-orange.svg)
-![Vivado](https://img.shields.io/badge/Tool-Xilinx%20Vivado-green.svg)
-![Resolution](https://img.shields.io/badge/VGA-640x480%20%40%2060Hz-purple.svg)
+![Language](https://img.shields.io/badge/Language-Verilog-blue.svg)
+![Board](https://img.shields.io/badge/Board-ZedBoard%20(XC7Z020)-orange.svg)
+![Tool](https://img.shields.io/badge/Tool-Vivado-green.svg)
+![Video](https://img.shields.io/badge/VGA-640x480%20%40%2060Hz-purple.svg)
 ![License](https://img.shields.io/badge/License-MIT-brightgreen.svg)
 
-A complete **Verilog hardware implementation** that captures real-time video from an **OV7670 camera module** and displays it live on a **VGA monitor**, running entirely on a Xilinx ZedBoard (Zynq-7000 FPGA).
+A Verilog design that captures live video from an **OV7670 camera** and shows it on a **VGA monitor**, using only the programmable logic (PL) of the ZedBoard. The camera setup, pixel capture, frame buffering and VGA output are all custom RTL. No software runs on the board.
 
-There is **no CPU core, no MicroBlaze, and no OS** involved — the entire pipeline (camera configuration, pixel capture, frame buffering, and VGA output) is custom FPGA logic.
-
----
-
-## 🧭 What This Project Does (Input → Output)
-
-In one sentence: **whatever the OV7670 camera is pointed at, appears live on the VGA monitor**, refreshed continuously at 60 Hz.
-
-| Stage | What Goes In | What Comes Out |
-| :--- | :--- | :--- |
-| **1. Input** | Live optical image seen by the OV7670 camera lens (e.g. a face, a printed photo, a phone screen) | 8-bit parallel pixel data (`OV7670_D[7:0]`) + `PCLK`, `HREF`, `VSYNC` timing signals |
-| **2. Capture** | Raw byte-pair pixel stream from the camera | 12-bit RGB444 pixel values written into the frame buffer |
-| **3. Storage** | 12-bit pixel + write address from the capture stage | One full 640×480 frame held in Block RAM (dual-clock, so writing and reading never collide) |
-| **4. Output** | Stored frame read out at 25 MHz | Standard VGA signal (`HSYNC`, `VSYNC`, 4-bit R/G/B) driving a monitor at 640×480 @ 60 Hz |
-
-**Example from actual hardware testing (see `docs/` photos):**
-- **Input**: A phone showing a photo of a puppy was held up in front of the OV7670 lens.
-- **Output**: The VGA monitor displayed the live camera feed of that phone screen in real time, proving the full capture → buffer → display pipeline works end-to-end on hardware (no simulation).
+> The Zynq processing system (PS7) is instantiated only to satisfy the Zynq design-rule check. It takes no part in the video path.
 
 ---
 
-## 🌟 Demo
-
-### Example 1 — Phone Screen (Puppy Photo)
-
-| Camera + Board Setup (Input Side) | VGA Monitor Output (Live Feed) |
-| :---: | :---: |
-| ![Hardware setup](docs/hardware-setup.png) | ![VGA output](docs/vga-output.png) |
-
-*(ZedBoard connected to the OV7670 camera via jumper wires, VGA cable running to a monitor. A phone displaying a puppy photo was held in front of the camera; the right-hand photo shows the monitor displaying that live feed.)*
-
-### Example 2 — Handwritten Notes on Paper
-
-| Camera + Board Setup (Input Side) | VGA Monitor Output (Live Feed) |
-| :---: | :---: |
-| ![Hardware setup 2](docs/hardware-setup-2.png) | ![VGA output handwriting](docs/vga-output-handwriting.png) |
-
-*(Same setup — ZedBoard, OV7670 camera, VGA cable to monitor. This time the camera was pointed at a handwritten note (columns labeled `name`, `age`, `salary`), and the VGA output shows the live capture of the page, confirming the pipeline reproduces fine text detail, not just blocks of color.)*
+## Table of Contents
+1. [Overview](#1-overview)
+2. [Features](#2-features)
+3. [Architecture](#3-architecture)
+4. [Repository Structure](#4-repository-structure)
+5. [Hardware Required](#5-hardware-required)
+6. [Pin Mapping and Wiring](#6-pin-mapping-and-wiring)
+7. [Clocking and Timing Constraints](#7-clocking-and-timing-constraints)
+8. [Build and Run](#8-build-and-run)
+9. [Camera Configuration](#9-camera-configuration)
+10. [Results](#10-results)
+11. [Troubleshooting](#11-troubleshooting)
+12. [Known Limitations](#12-known-limitations)
+13. [Future Work](#13-future-work)
+14. [License](#14-license)
 
 ---
 
-## 🚀 Key Features
+## 1. Overview
 
-- **Pure Verilog Hardware Architecture** — zero software overhead, direct hardware pipeline, minimal latency.
-- **Hardware I2C / SCCB Controller** — automatically configures the OV7670's internal registers (AGC, AWB, RGB output mode, scaling) on power-up or button reset, with no host CPU needed.
-- **Byte Stream → 12-bit RGB Capture** — extracts pixel byte pairs from the camera bus and converts them into 12-bit RGB (RGB444) video data.
-- **Dual-Clock Frame Buffer (BRAM)** — Xilinx Block RAM (`blk_mem_gen_0`) with decoupled write (camera `PCLK`) and read (VGA 25 MHz) clock domains, so capture and display never interfere with each other.
-- **Standard VGA 640×480 @ 60 Hz Timing Generator** — produces precise horizontal/vertical sync and drives the board's R/G/B DAC resistor ladder.
-- **Debounced Configuration Reset** — press a single board pushbutton to re-trigger camera I2C initialization if the picture looks wrong on startup.
+| Stage | Input | Output |
+|:--|:--|:--|
+| Camera setup | Register table (77 writes) | SCCB (I2C-compatible) writes to the OV7670 |
+| Capture | 8-bit data, `PCLK`, `HREF`, `VSYNC` | 12-bit RGB444 pixel, write address, write enable |
+| Frame buffer | Pixel stream on the camera clock | One 640x480 frame in dual-port block RAM |
+| VGA output | Frame read at 25 MHz | `HSYNC`, `VSYNC`, 4-bit R/G/B at 640x480 @ ~59.5 Hz |
 
 ---
 
-## 📐 System Architecture (Signal Flow)
+## 2. Features
+
+- Pure-Verilog video pipeline, with no processor in the data path.
+- SCCB master and register sequencer that configure the camera at power-up, or when the button is held.
+- RGB565 to RGB444 conversion (top 4 bits of each colour).
+- Dual-port block-RAM frame buffer with separate write clock (camera `PCLK`) and read clock (25 MHz VGA).
+- Standard 640x480 @ 60 Hz VGA timing.
+- Auto-white-balance register block, which removed the green colour cast seen with the earlier table.
+- Timing constraints for both clock domains, with input delays on the camera data signals.
+
+---
+
+## 3. Architecture
 
 ```mermaid
 graph TD
-    CLK100[100 MHz OSC] --> MMCM[MMCME2 Clocking Wizard]
-    MMCM -->|50 MHz| CTRL[OV7670 Controller / I2C]
-    MMCM -->|25 MHz| VGA[VGA Timing Generator]
-
-    CAM[OV7670 Camera] -->|PCLK, VSYNC, HREF, D 7:0| CAPTURE[OV7670 Capture Unit]
+    CLK100[100 MHz oscillator] --> MMCM[MMCM clocking]
+    MMCM -->|50 MHz| CTRL[Camera controller: SCCB + registers]
+    MMCM -->|25 MHz| VGA[VGA timing generator]
+    CTRL -->|XCLK = 50 MHz / 2| CAM[OV7670]
     CTRL -->|SIOC, SIOD| CAM
-    CTRL -->|XCLK 25MHz| CAM
-
-    CAPTURE -->|Addr, Data, WE| BRAM[(Block RAM Frame Buffer)]
-    VGA -->|Read Addr| BRAM
-    BRAM -->|12-bit Pixel Data| VGA
-
-    VGA -->|RGB 4:4:4, HSYNC, VSYNC| MON[VGA Display Monitor]
-    BTN[Center Pushbutton] --> DEBOUNCE[Debounce Unit] --> CTRL
+    CAM -->|PCLK, VSYNC, HREF, D 7:0| CAP[Capture]
+    CAP -->|addr, data, we| BRAM[(Block-RAM frame buffer)]
+    VGA -->|read address| BRAM
+    BRAM -->|12-bit pixel| VGA
+    VGA -->|RGB, HSYNC, VSYNC| MON[VGA monitor]
+    BTN[Centre button] --> DEB[Debounce] --> CTRL
 ```
 
----
+### Modules
 
-## 🧩 Bill of Materials (Physical Inputs to the System)
+| Module | File | Role |
+|:--|:--|:--|
+| `ov7670_top` | `ov7670_top.v` | Top level. Connects all blocks, the frame buffer and the PS7 placeholder. |
+| `clocking` | `clocking.v` | MMCME2_ADV: 100 MHz to 50 MHz and 25 MHz. |
+| `ov7670_controller` | `ov7670_controller.v` | Joins the SCCB sender and register table, and makes `XCLK` (50 MHz / 2 = 25 MHz). |
+| `ov7670_registers` | `ov7670_registers.v` | Table of 77 16-bit `{register, value}` writes, ended by `16'hFFFF`. |
+| `i2c_sender` | `i2c_sender.v` | SCCB write state machine, about 50 kHz SCL. It pulses `taken` only after STOP. |
+| `ov7670_capture` | `ov7670_capture.v` | Joins byte pairs into RGB444 pixels and generates the write address. |
+| `vga` | `vga.v` | 800x525 timing counters, read address, blanking, RGB output. |
+| `debounce` | `debounce.v` | Button filter. The button must be held about 0.34 s. |
+| `blk_mem_gen_0` | generated IP | Simple dual-port RAM, 12 bits x 307,200 words. |
+| `ps7_bd` | generated block design | PS7 with the ZedBoard preset (design-rule placeholder only). |
 
-| Item | Purpose |
-| :--- | :--- |
-| Xilinx ZedBoard (XC7Z020, part `xc7z020clg484-1`) | The FPGA board running all the logic |
-| OV7670 camera module (no FIFO version) | Video input source |
-| Jumper wires (male-to-female, ~10) | Connects OV7670 to ZedBoard Pmod/GPIO pins |
-| VGA cable | Carries the video output to a monitor |
-| VGA-capable monitor | Displays the live feed (this is your "output device") |
-| Micro-USB cable | Programming/JTAG connection from PC to ZedBoard |
-| 5V power supply for ZedBoard | Powers the board |
+### Pixel conversion
+The OV7670 sends RGB565 as two bytes per pixel: `h = {R[4:0], G[5:3]}` then `l = {G[2:0], B[4:0]}`. The stored 12-bit pixel is
 
----
+```
+{R4, G4, B4} = { h[7:4], h[2:0], l[7], l[4:1] }
+```
 
-## 🔌 Hardware Pin Mapping (ZedBoard)
-
-### 1. OV7670 Camera Interface — **Inputs to the FPGA from the camera**
-
-| Signal Name | FPGA Pin | IO Standard | Direction | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `OV7670_PWDN` | `Y11` | LVTTL | FPGA → Camera | Power Down Control |
-| `OV7670_RESET` | `AB11` | LVTTL | FPGA → Camera | Camera Active-Low Reset |
-| `OV7670_D[0]` | `AA11` | LVTTL | Camera → FPGA | Pixel Data Bit 0 |
-| `OV7670_D[1]` | `AB10` | LVTTL | Camera → FPGA | Pixel Data Bit 1 |
-| `OV7670_D[2]` | `Y10` | LVTTL | Camera → FPGA | Pixel Data Bit 2 |
-| `OV7670_D[3]` | `AB9` | LVTTL | Camera → FPGA | Pixel Data Bit 3 |
-| `OV7670_D[4]` | `AA9` | LVTTL | Camera → FPGA | Pixel Data Bit 4 |
-| `OV7670_D[5]` | `AA8` | LVTTL | Camera → FPGA | Pixel Data Bit 5 |
-| `OV7670_D[6]` | `W12` | LVTTL | Camera → FPGA | Pixel Data Bit 6 |
-| `OV7670_D[7]` | `V12` | LVTTL | Camera → FPGA | Pixel Data Bit 7 |
-| `OV7670_XCLK` | `W11` | LVTTL | FPGA → Camera | System clock output to camera (25 MHz) |
-| `OV7670_PCLK` | `W10` | LVTTL | Camera → FPGA | Pixel clock input from camera |
-| `OV7670_HREF` | `V10` | LVTTL | Camera → FPGA | Horizontal reference input |
-| `OV7670_VSYNC` | `V9` | LVTTL | Camera → FPGA | Vertical sync input |
-| `OV7670_SIOD` | `W8` | LVTTL | Bidirectional | SCCB Data (I2C SIOD) |
-| `OV7670_SIOC` | `V8` | LVTTL | FPGA → Camera | SCCB Clock (I2C SIOC) |
-
-### 2. VGA Output Pins — **Outputs from the FPGA to the monitor**
-
-| Signal Name | FPGA Pin | IO Standard | Description |
-| :--- | :--- | :--- | :--- |
-| `vga_red[0..3]` | `V20, U20, V19, V18` | LVCMOS33 | Red channel (4-bit DAC) |
-| `vga_green[0..3]` | `AB22, AA22, AB21, AA21` | LVCMOS33 | Green channel (4-bit DAC) |
-| `vga_blue[0..3]` | `Y21, Y20, AB20, AB19` | LVCMOS33 | Blue channel (4-bit DAC) |
-| `vga_hsync` | `AA19` | LVCMOS33 | Horizontal sync pulse |
-| `vga_vsync` | `Y19` | LVCMOS33 | Vertical sync pulse |
-
-### 3. System & Status Pins
-
-| Signal Name | FPGA Pin | IO Standard | Description |
-| :--- | :--- | :--- | :--- |
-| `clk100` | `Y9` | LVCMOS33 | 100 MHz on-board clock oscillator (system input) |
-| `btn` | `T18` | LVTTL | Center pushbutton — re-send I2C config (manual input) |
-| `LED[0]` | `T22` | LVTTL | Configuration-finished indicator (status output) |
-| `LED[1..7]` | `T21, U22, U21, V22, W22, U19, U14` | LVTTL | Reserved / status LEDs |
+The VGA module drives red from `pixel[11:8]`, green from `pixel[7:4]` and blue from `pixel[3:0]`.
 
 ---
 
-## 🛠️ Step-by-Step: Build and Run in Vivado
-
-### Step 1 — Wire Up the Hardware
-1. Connect the OV7670 camera module to the ZedBoard using jumper wires, following the **pin mapping table above** (Section 1).
-2. Connect a VGA cable from the ZedBoard's VGA port to your monitor.
-3. Connect the ZedBoard to your PC with the micro-USB programming cable.
-4. **Do not power on yet** — power on only after the bitstream is loaded, or after you're ready to program.
-
-### Step 2 — Create a New Vivado Project
-1. Open **Xilinx Vivado** (2020.1 or newer).
-2. Click **Create Project** → give it a name and location.
-3. Choose **RTL Project** (do *not* specify sources at this step).
-4. Select board: **ZedBoard**, part `xc7z020clg484-1`.
-
-### Step 3 — Add Source Files
-1. Add every Verilog file from `rtl/` to the project:
-   - `ov7670_top.v`, `vga.v`, `ov7670_capture.v`, `ov7670_controller.v`, `ov7670_registers.v`, `i2c_sender.v`, `debounce.v`, `clocking.v`
-2. Set `ov7670_top.v` as the **Top Module**.
-3. Add `constraints/zedboard_ov7670.xdc` under **Constraints**.
-
-### Step 4 — Generate the Block RAM IP (`blk_mem_gen_0`)
-This IP core is **not included in the repo** — Vivado generates it locally, and it's required for the frame buffer to exist.
-1. Open **IP Catalog** → search **Block Memory Generator**.
-2. Configure:
-   - **Component Name**: `blk_mem_gen_0`
-   - **Memory Type**: `Simple Dual Port RAM`
-   - **Port A (Write)**: Width = `12`, Depth = `307200` (or Address Width = `19`)
-   - **Port B (Read)**: Width = `12`, Depth = `307200`
-   - **Enable Port Type**: `Always Enabled`
-3. Click **Generate Output Products**.
-
-### Step 5 — Synthesize, Implement, and Program
-1. Run **Synthesis** (`Ctrl+Shift+R`).
-2. Run **Implementation** (`Ctrl+Shift+I`).
-3. Click **Generate Bitstream**.
-4. Power on the ZedBoard, open **Hardware Manager**, and click **Program Device**.
-
-### Step 6 — Verify the Output
-1. Once programmed, `LED[0]` should turn on — this confirms the camera's I2C configuration sequence completed successfully.
-2. The VGA monitor should now show a **live image of whatever the OV7670 lens is pointed at**.
-3. If the picture is blank, frozen, or discolored, press the **center pushbutton** (`btn`) to re-send the camera configuration — see Troubleshooting below.
-
----
-
-## 📊 Synthesis & Implementation Metrics (Vivado, Post-Implementation)
-
-The design is extremely lightweight, leaving well over 99% of FPGA logic free for downstream image processing (edge detection, thresholding, ML inference, etc.).
-
-| Resource | Used | Available | Utilization % |
-| :--- | :---: | :---: | :---: |
-| **LUT** | 431 | 53,200 | 0.81 % |
-| **FF (Flip-Flops)** | 266 | 106,400 | 0.25 % |
-| **BRAM** | 75 | 140 | 53.57 % |
-| **IO Pins** | 39 | 200 | 19.50 % |
-| **BUFG** | 4 | 32 | 12.50 % |
-| **MMCM** | 1 | 4 | 25.00 % |
-
-> ⚠️ **Power report caveat**: If your own Power report shows an alarmingly high on-chip power / junction-temperature warning, this is almost always a **vectorless power estimate with no clock constraints defined**, not a real hardware issue — see Troubleshooting.
-
----
-
-## 📁 Repository Structure
+## 4. Repository Structure
 
 ```text
 ov7670-zedboard-vga/
 ├── rtl/
-│   ├── ov7670_top.v        # Top-level Verilog wrapper
-│   ├── vga.v               # VGA 640x480 @ 60Hz timing & color generator
-│   ├── ov7670_capture.v    # Pixel byte capture & RGB extractor
-│   ├── ov7670_controller.v # Camera controller top
-│   ├── ov7670_registers.v  # SCCB configuration memory matrix
-│   ├── i2c_sender.v        # I2C / SCCB bit-bang master protocol
-│   ├── debounce.v          # Pushbutton noise filter logic
-│   └── clocking.v          # MMCME2 clock synthesizer (100MHz -> 50MHz/25MHz)
+│   ├── ov7670_top.v
+│   ├── vga.v
+│   ├── ov7670_capture.v
+│   ├── ov7670_controller.v
+│   ├── ov7670_registers.v
+│   ├── i2c_sender.v
+│   ├── debounce.v
+│   └── clocking.v
 ├── constraints/
-│   └── zedboard_ov7670.xdc # Vivado pin assignment & timing constraints
+│   └── zedboard_ov7670.xdc
 ├── docs/
-│   ├── hardware-setup.png  # Photo: camera + ZedBoard wiring (input side)
-│   └── vga-output.png      # Photo: live VGA monitor output
+│   ├── hardware-setup.png
+│   └── vga-output.png
 ├── LICENSE
-├── .gitignore
 └── README.md
 ```
 
----
-
-## 💡 Troubleshooting & Notes
-
-- **Blank or discolored screen on startup** → Press the center pushbutton (`btn` / `T18`) to re-trigger the SCCB register configuration sequence.
-- **`CLOCK_DEDICATED_ROUTE` warning** → `OV7670_PCLK` enters through a standard FPGA I/O pin, not a dedicated clock pin. The XDC includes `set_property CLOCK_DEDICATED_ROUTE FALSE [get_nets OV7670_PCLK_IBUF]` so it can still route through the internal BUFG network. This is expected and not an error.
-- **Power report shows an extreme junction-temperature warning** → This happens when Vivado has no explicit clock constraints (`create_clock`) for `clk100` or `OV7670_PCLK`, so it falls back to pessimistic default toggle-rate estimates (report will also show "Confidence level: Low"). Add proper clock constraints to the `.xdc` and re-implement to get a realistic, low sub-1W estimate.
-- **`blk_mem_gen_0` not found during synthesis** → You skipped Step 4. This IP is generated locally per-project and is intentionally not checked into the repo.
+`blk_mem_gen_0` and `ps7_bd` are generated inside Vivado and are not stored in the repository.
 
 ---
 
-## 📄 License
+## 5. Hardware Required
 
-Distributed under the **MIT License**. Feel free to modify and adapt for academic research or embedded vision projects!
+| Item | Notes |
+|:--|:--|
+| ZedBoard (XC7Z020, `xc7z020clg484-1`) | Main board |
+| OV7670 module, **non-FIFO, 18-pin** | The module must expose `PCLK` and `XCLK`. Boards with `WRST/RRST/OE/RCK` pins (AL422B FIFO) do not work with this design. |
+| Jumper wires, **10 cm or shorter** | Female-to-female. Long wires ring at 25 MHz and cause shifted lines. |
+| VGA cable and monitor | Video output |
+| Micro-USB cable on **PROG (J17)** | JTAG programming |
+| 12 V ZedBoard supply | Board power |
+
+---
+
+## 6. Pin Mapping and Wiring
+
+Camera signals use PMOD **JA** and **JB**. Pin numbers match the ZedBoard user guide, so check them against your board revision.
+
+### 6.1 Camera to PMOD JA
+
+| OV7670 signal | FPGA pin | PMOD pin |
+|:--|:--|:--|
+| `PWDN` | Y11 | JA1 |
+| `D0` | AA11 | JA2 |
+| `D2` | Y10 | JA3 |
+| `D4` | AA9 | JA4 |
+| `RESET` | AB11 | JA7 |
+| `D1` | AB10 | JA8 |
+| `D3` | AB9 | JA9 |
+| `D5` | AA8 | JA10 |
+
+### 6.2 Camera to PMOD JB
+
+| OV7670 signal | FPGA pin | PMOD pin |
+|:--|:--|:--|
+| `D6` | W12 | JB1 |
+| `XCLK` | W11 | JB2 |
+| `HREF` | V10 | JB3 |
+| `SIOD` (SDA) | W8 | JB4 |
+| `D7` | V12 | JB7 |
+| `PCLK` | W10 | JB8 |
+| `VSYNC` | V9 | JB9 |
+| `SIOC` (SCL) | V8 | JB10 |
+
+### 6.3 Power
+
+- On each PMOD connector, pins 5 and 11 are GND, and pins 6 and 12 are 3.3 V.
+- Connect the camera 3V3 to a PMOD 3.3 V pin and the camera GND to a PMOD GND pin.
+- Run several ground wires, and place a ground wire next to `PCLK` and `XCLK`.
+- `SIOD` is tri-stated and needs a pull-up. Most modules have one fitted. If yours does not, add 4.7 kOhm to 3.3 V.
+
+### 6.4 VGA, clock, button, LEDs (on-board)
+
+| Signal | FPGA pins | Standard |
+|:--|:--|:--|
+| `vga_red[0..3]` | V20, U20, V19, V18 | LVCMOS33 |
+| `vga_green[0..3]` | AB22, AA22, AB21, AA21 | LVCMOS33 |
+| `vga_blue[0..3]` | Y21, Y20, AB20, AB19 | LVCMOS33 |
+| `vga_hsync`, `vga_vsync` | AA19, Y19 | LVCMOS33 |
+| `clk100` | Y9 | LVCMOS33 |
+| `btn` (centre button) | T18 | LVTTL |
+| `LED[0..7]` | T22, T21, U22, U21, V22, W22, U19, U14 | LVTTL |
+
+`LED[0]` lights when the register sequence has finished. The SCCB acknowledge bit is not checked, so the LED does not prove that the camera accepted the writes.
+
+---
+
+## 7. Clocking and Timing Constraints
+
+| Clock | Frequency | Source | Used by |
+|:--|:--|:--|:--|
+| `clk100` | 100 MHz | Board oscillator | MMCM input |
+| `clk50` | 50 MHz | MMCM | Controller, SCCB, debounce |
+| `clk25` | 25 MHz | MMCM | VGA logic, frame-buffer read port |
+| `XCLK` | 25 MHz | `clk50 / 2` | Camera input clock |
+| `PCLK` | about 25 MHz | OV7670 (with `CLKRC = 0x00`) | Capture logic, frame-buffer write port |
+
+The XDC defines:
+
+- `create_clock` for `clk100` (10 ns) and `OV7670_PCLK` (40 ns).
+- An asynchronous clock group between the two domains. The only crossing is the dual-port block RAM.
+- `set_input_delay` on `OV7670_D[*]`, `OV7670_HREF` and `OV7670_VSYNC` relative to `PCLK`.
+- `CLOCK_DEDICATED_ROUTE FALSE` on `OV7670_PCLK_IBUF`. `PCLK` is on a pin that is not clock-capable, so it reaches the BUFG through general routing. Expect extra skew on that net.
+
+No output delays are set on the VGA pins, so interface timing there is not verified.
+
+---
+
+## 8. Build and Run
+
+### Step 1. Create the project
+1. Open Vivado (2020.1 or newer).
+2. Create an RTL project and select the **ZedBoard** board (`xc7z020clg484-1`).
+3. Add all files in `rtl/` and set `ov7670_top` as the top module.
+4. Add `constraints/zedboard_ov7670.xdc`.
+
+### Step 2. Generate the frame buffer IP (`blk_mem_gen_0`)
+1. IP Catalog, **Block Memory Generator**.
+2. Component name `blk_mem_gen_0`. Memory type **Simple Dual Port RAM**.
+3. Width **12**, depth **307200**, port A write enable on (`wea`), port B always enabled.
+4. Generate output products.
+
+### Step 3. Create the PS7 placeholder (`ps7_bd`)
+1. Create a block design named `ps7_bd`.
+2. Add **ZYNQ7 Processing System**, then run **Block Automation** (applies the ZedBoard preset).
+3. Disable the `M_AXI_GP0` interface.
+4. Leave `DDR` and `FIXED_IO` as external interfaces, validate, and generate output products.
+5. The top level instantiates `ps7_bd` directly. If Vivado asks for a wrapper, instantiate `ps7_bd_wrapper` instead.
+
+### Step 4. Implement and program
+1. Run synthesis, implementation and generate the bitstream.
+2. Set the boot jumpers (JP7 to JP11) for JTAG, connect the micro-USB cable to **PROG (J17)**, and power on.
+3. Open Hardware Manager, **Auto Connect**, then **Program Device**.
+
+### Step 5. Check the output
+1. `LED[0]` turns on after the register sequence (about 46 ms).
+2. The monitor shows the camera image. Focus by turning the lens.
+3. If the picture is blank or wrong, hold the centre button for about half a second to resend the configuration.
+
+---
+
+## 9. Camera Configuration
+
+The table in `ov7670_registers.v` has 77 writes (addresses `0x00` to `0x4C`). At about 0.6 ms per write, the sequence takes roughly 46 ms.
+
+| Group | Registers |
+|:--|:--|
+| Reset | `COM7` (written twice) |
+| Format and clock | `COM7` (RGB), `CLKRC`, `COM3`, `COM14`, `COM1`, `COM15` (RGB565, full range), `TSLB` |
+| Colour matrix | `MTX1` to `MTX6`, `MTXS` |
+| Gamma and denoise | `COM13`, `COM12` |
+| Window | `HSTART`, `HSTOP`, `HREF`, `VSTART`, `VSTOP`, `VREF`, `COM6`, `MVFP` |
+| AGC / AEC / banding | `COM9`, `COM8`, `BD50MAX`, `BD60MAX`, `AEW`, `AEB`, `VPT`, `HAECC1` to `HAECC7` |
+| Black level and reserved | `ABLC1`, `THL_ST`, `GFIX`, reserved registers |
+| Auto white balance | `COM16`, `AWBC1` to `AWBC6`, `0x59` to `0x5E`, `GGAIN`, `0x6C` to `0x6F`, `BLUE`, `RED` |
+| Final | `COM8 = 0xE7` |
+
+With `CLKRC = 0x00` there is no division, so `PCLK` equals `XCLK` (25 MHz). That gives about 31 frames per second. This is a calculated figure and has not been measured.
+
+---
+
+## 10. Results
+
+### 10.1 Demo
+
+| Setup | VGA output |
+|:--:|:--:|
+| ![Hardware setup](docs/hardware-setup.png) | ![VGA output](docs/vga-output.png) |
+
+The earlier register table produced a strong green tint. After adding the auto-white-balance block, colours look natural. Some sensor grain and occasional shifted lines remain (see Known Limitations).
+
+### 10.2 Post-implementation figures
+
+These come from Vivado reports on the build with the 40 ns `PCLK` constraint. They predate the AWB table, so re-run implementation and update them.
+
+| Metric | Value |
+|:--|:--|
+| Slice LUTs | 470 / 53,200 |
+| Slice registers | 215 / 106,400 |
+| Block RAM tiles | 104 / 140 (103.5 in the frame buffer) |
+| Bonded IOB | 40 / 200 |
+| BUFG / MMCM | 4 / 1 |
+| Worst setup slack (WNS) | +14.415 ns |
+| Worst hold slack (WHS) | +0.094 ns |
+| Failing endpoints | 0 |
+| Estimated total power | 1.84 W (confidence: low) |
+
+Most of the LUT count (382) is output multiplexing inside the block-RAM IP. The capture, controller and VGA logic use about 81 LUTs and 172 registers.
+
+Of the 1.84 W, **1.556 W is the idle PS7** and 0.106 W is the MMCM. The logic you wrote uses a few milliwatts. The power analysis is vectorless, so treat it as an estimate.
+
+---
+
+## 11. Troubleshooting
+
+| Symptom | Likely cause and fix |
+|:--|:--|
+| Blank screen, `LED[0]` off | Check `SIOC`/`SIOD` wiring and the pull-up on `SIOD`, and that the camera is powered at 3.3 V. |
+| `LED[0]` on but no picture | The ACK is not checked, so writes may have failed. Check `PCLK`, `XCLK` and `HREF` wiring. Re-send with the button. |
+| Wrong or tinted colours | Check D0 to D7 wiring (a swapped or loose data line tints colours). Check lighting. Tune the AWB registers. |
+| Shifted or torn lines | Shorten the wires, add a ground wire beside `PCLK` and `XCLK`, or set `CLKRC = 0x01` to halve `PCLK`. |
+| Grain in dim light | Add light. Lower the `COM9` AGC ceiling. |
+| Image out of focus | Turn the lens until a printed page looks sharp. |
+| `blk_mem_gen_0` or `ps7_bd` not found | Generate the IP (Step 2) and the block design (Step 3). |
+| `CLOCK_DEDICATED_ROUTE` warning | Expected. `PCLK` is on a non-clock pin and the XDC already allows it. |
+| Board not seen in Hardware Manager | Use the PROG (J17) port, set the JTAG jumpers, and install the Digilent cable drivers. |
+| High power in the report | This is the PS7 placeholder, not the video logic. |
+
+---
+
+## 12. Known Limitations
+
+- **Single frame buffer.** The camera writes at about 31 fps while the VGA reads at 60 Hz, so a tear line can appear in moving scenes.
+- **Free-running write address.** `ov7670_capture` uses one counter for the whole frame. A missed or doubled pixel shifts the rest of the frame until the next `VSYNC`.
+- **SCCB ACK not checked.** `LED[0]` shows that the sequence finished, not that every write succeeded.
+- **4-bit colour.** The VGA DAC and the stored pixel are 4 bits per channel, so the image has at most 4096 colours.
+- **Possible 1 to 2 pixel offset** at the left edge, from the registered VGA read path.
+- **Constraints.** No output delay is set on the VGA pins, and `PCLK` uses a non-dedicated clock route.
+- **Not measured.** Frame rate and end-to-end latency.
+
+---
+
+## 13. Future Work
+
+- Row-based write addressing in the capture module, so one bad pixel cannot shift later lines.
+- Check the SCCB ACK and show a failure on `LED[1]`.
+- Move `PCLK` to a clock-capable pin and remove the `CLOCK_DEDICATED_ROUTE` override.
+- Reduce tearing, for example with a 320x240 double buffer.
+- Add image processing (grayscale, filtering, edge detection) between the buffer and VGA.
+- HDMI output through the on-board ADV7511 for 24-bit colour.
+- Measure frame rate and latency.
+
+---
+
+## 14. License
+
+Released under the **MIT License**.
