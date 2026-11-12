@@ -284,6 +284,9 @@ With `CLKRC = 0x00` there is no division, so `PCLK` equals `XCLK` (25 MHz). That
 | ![Hardware setup: OV7670 wired to the ZedBoard PMOD ports, with the VGA monitor showing the live image](docs/hardware-setup.jpg) | ![VGA output: live camera image of a phone screen showing a tiger](docs/vga-output.jpg) |
 
 *Left: the lab setup. Only the ZedBoard, the OV7670 with its jumper wires, and the VGA monitor are part of the design. The oscilloscope and bench supply in the background are not used. Right: close-up of the live image on the monitor.*
+
+The earlier register table produced a strong green tint. After adding the auto-white-balance block, colours are close to natural. Some sensor grain, over-exposure in bright areas, and an occasional shifted line or edge strip remain (see Known Limitations).
+
 ### 10.2 Post-implementation figures
 
 These come from Vivado reports on the build with the 40 ns `PCLK` constraint. They predate the AWB table, so re-run implementation and update them.
