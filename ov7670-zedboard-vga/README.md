@@ -30,6 +30,16 @@ A Verilog design that captures live video from an **OV7670 camera** and shows it
 
 ---
 
+## Quick Start
+
+1. Create a Vivado project for `xc7z020clg484-1`, add `rtl/*.v` and `constraints/zedboard_ov7670.xdc`, and set `ov7670_top` as the top module.
+2. Generate the two IPs: `blk_mem_gen_0` (frame buffer) and `ps7_bd` (PS7 placeholder). See [Section 8](#8-build-and-run).
+3. Wire the camera to PMOD JA and JB ([Section 6](#6-pin-mapping-and-wiring)), using short jumper wires.
+4. Build the bitstream, program the board over JTAG, and connect a VGA monitor.
+5. If the picture is blank, hold the **up button (BTNU)** for about half a second to resend the camera configuration.
+
+---
+
 ## 1. Overview
 
 | Stage | Input | Output |
@@ -67,7 +77,7 @@ graph TD
     VGA -->|read address| BRAM
     BRAM -->|12-bit pixel| VGA
     VGA -->|RGB, HSYNC, VSYNC| MON[VGA monitor]
-    BTN[Centre button] --> DEB[Debounce] --> CTRL
+    BTN[Up button BTNU] --> DEB[Debounce] --> CTRL
 ```
 
 ### Modules
@@ -112,13 +122,13 @@ ov7670-zedboard-vga/
 ├── constraints/
 │   └── zedboard_ov7670.xdc
 ├── docs/
-│   ├── hardware-setup.png
-│   └── vga-output.png
+│   ├── hardware-setup.jpg
+│   └── vga-output.jpg
 ├── LICENSE
 └── README.md
 ```
 
-`blk_mem_gen_0` and `ps7_bd` are generated inside Vivado and are not stored in the repository.
+`blk_mem_gen_0` and `ps7_bd` are generated inside Vivado and are not stored in the repository. Each module lives in its own file, with one definition per file.
 
 ---
 
@@ -137,7 +147,7 @@ ov7670-zedboard-vga/
 
 ## 6. Pin Mapping and Wiring
 
-Camera signals use PMOD **JA** and **JB**. Pin numbers match the ZedBoard user guide, so check them against your board revision.
+Camera signals use PMOD **JA** and **JB**. Pin numbers match `constraints/zedboard_ov7670.xdc` and the ZedBoard user guide, so check them against your board revision.
 
 ### 6.1 Camera to PMOD JA
 
@@ -170,7 +180,7 @@ Camera signals use PMOD **JA** and **JB**. Pin numbers match the ZedBoard user g
 - On each PMOD connector, pins 5 and 11 are GND, and pins 6 and 12 are 3.3 V.
 - Connect the camera 3V3 to a PMOD 3.3 V pin and the camera GND to a PMOD GND pin.
 - Run several ground wires, and place a ground wire next to `PCLK` and `XCLK`.
-- `SIOD` is tri-stated and needs a pull-up. Most modules have one fitted. If yours does not, add 4.7 kOhm to 3.3 V.
+- `SIOD` is tri-stated and needs a pull-up. Most modules have one fitted. If yours does not, add 4.7 kOhm to 3.3 V, or as a fallback add `set_property PULLUP true [get_ports OV7670_SIOD]` to the XDC.
 
 ### 6.4 VGA, clock, button, LEDs (on-board)
 
@@ -181,10 +191,12 @@ Camera signals use PMOD **JA** and **JB**. Pin numbers match the ZedBoard user g
 | `vga_blue[0..3]` | Y21, Y20, AB20, AB19 | LVCMOS33 |
 | `vga_hsync`, `vga_vsync` | AA19, Y19 | LVCMOS33 |
 | `clk100` | Y9 | LVCMOS33 |
-| `btn` (centre button) | T18 | LVTTL |
+| `btn` (**up button, BTNU**) | T18 | LVTTL |
 | `LED[0..7]` | T22, T21, U22, U21, V22, W22, U19, U14 | LVTTL |
 
-`LED[0]` lights when the register sequence has finished. The SCCB acknowledge bit is not checked, so the LED does not prove that the camera accepted the writes.
+`btn` is the **up** push button (BTNU), not the centre button. All "resend" actions in this document use that button.
+
+`LED[0]` lights when the register sequence has finished. The SCCB acknowledge bit is not checked, so the LED does not prove that the camera accepted the writes. `LED[1..7]` are driven low.
 
 ---
 
@@ -220,8 +232,9 @@ No output delays are set on the VGA pins, so interface timing there is not verif
 ### Step 2. Generate the frame buffer IP (`blk_mem_gen_0`)
 1. IP Catalog, **Block Memory Generator**.
 2. Component name `blk_mem_gen_0`. Memory type **Simple Dual Port RAM**.
-3. Width **12**, depth **307200**, port A write enable on (`wea`), port B always enabled.
-4. Generate output products.
+3. Width **12**, depth **307200**, port A write enable on (`wea`).
+4. Set port B to **Always Enabled**. The top level has no `enb` pin, so the instantiation will not match otherwise.
+5. Generate output products.
 
 ### Step 3. Create the PS7 placeholder (`ps7_bd`)
 1. Create a block design named `ps7_bd`.
@@ -238,7 +251,7 @@ No output delays are set on the VGA pins, so interface timing there is not verif
 ### Step 5. Check the output
 1. `LED[0]` turns on after the register sequence (about 46 ms).
 2. The monitor shows the camera image. Focus by turning the lens.
-3. If the picture is blank or wrong, hold the centre button for about half a second to resend the configuration.
+3. If the picture is blank or wrong, hold the **up button (BTNU)** for about half a second to resend the configuration.
 
 ---
 
@@ -249,7 +262,7 @@ The table in `ov7670_registers.v` has 77 writes (addresses `0x00` to `0x4C`). At
 | Group | Registers |
 |:--|:--|
 | Reset | `COM7` (written twice) |
-| Format and clock | `COM7` (RGB), `CLKRC`, `COM3`, `COM14`, `COM1`, `COM15` (RGB565, full range), `TSLB` |
+| Format and clock | `COM7` (RGB), `CLKRC`, `COM3`, `COM14`, `RGB444` (register `0x8C`, RGB444 disabled), `COM1`, `COM15` (RGB565, full range), `TSLB` |
 | Colour matrix | `MTX1` to `MTX6`, `MTXS` |
 | Gamma and denoise | `COM13`, `COM12` |
 | Window | `HSTART`, `HSTOP`, `HREF`, `VSTART`, `VSTOP`, `VREF`, `COM6`, `MVFP` |
@@ -268,9 +281,11 @@ With `CLKRC = 0x00` there is no division, so `PCLK` equals `XCLK` (25 MHz). That
 
 | Setup | VGA output |
 |:--:|:--:|
-| ![Hardware setup](docs/hardware-setup.png) | ![VGA output](docs/vga-output.png) |
+| ![Hardware setup: OV7670 wired to the ZedBoard PMOD ports, with the VGA monitor showing the live image](docs/hardware-setup.jpg) | ![VGA output: live camera image of a phone screen showing a tiger](docs/vga-output.jpg) |
 
-The earlier register table produced a strong green tint. After adding the auto-white-balance block, colours look natural. Some sensor grain and occasional shifted lines remain (see Known Limitations).
+*Left: the lab setup. Only the ZedBoard, the OV7670 with its jumper wires, and the VGA monitor are part of the design. The oscilloscope and bench supply in the background are not used. Right: close-up of the live image on the monitor.*
+
+The earlier register table produced a strong green tint. After adding the auto-white-balance block, colours are close to natural. Some sensor grain, over-exposure in bright areas, and an occasional shifted line or edge strip remain (see Known Limitations).
 
 ### 10.2 Post-implementation figures
 
@@ -299,7 +314,7 @@ Of the 1.84 W, **1.556 W is the idle PS7** and 0.106 W is the MMCM. The logic yo
 | Symptom | Likely cause and fix |
 |:--|:--|
 | Blank screen, `LED[0]` off | Check `SIOC`/`SIOD` wiring and the pull-up on `SIOD`, and that the camera is powered at 3.3 V. |
-| `LED[0]` on but no picture | The ACK is not checked, so writes may have failed. Check `PCLK`, `XCLK` and `HREF` wiring. Re-send with the button. |
+| `LED[0]` on but no picture | The ACK is not checked, so writes may have failed. Check `PCLK`, `XCLK` and `HREF` wiring. Re-send with the up button (BTNU). |
 | Wrong or tinted colours | Check D0 to D7 wiring (a swapped or loose data line tints colours). Check lighting. Tune the AWB registers. |
 | Shifted or torn lines | Shorten the wires, add a ground wire beside `PCLK` and `XCLK`, or set `CLKRC = 0x01` to halve `PCLK`. |
 | Grain in dim light | Add light. Lower the `COM9` AGC ceiling. |
@@ -307,6 +322,7 @@ Of the 1.84 W, **1.556 W is the idle PS7** and 0.106 W is the MMCM. The logic yo
 | `blk_mem_gen_0` or `ps7_bd` not found | Generate the IP (Step 2) and the block design (Step 3). |
 | `CLOCK_DEDICATED_ROUTE` warning | Expected. `PCLK` is on a non-clock pin and the XDC already allows it. |
 | Board not seen in Hardware Manager | Use the PROG (J17) port, set the JTAG jumpers, and install the Digilent cable drivers. |
+| Button does nothing | The resend button is the **up** button (BTNU), not the centre one. Hold it for about half a second. |
 | High power in the report | This is the PS7 placeholder, not the video logic. |
 
 ---
@@ -319,6 +335,7 @@ Of the 1.84 W, **1.556 W is the idle PS7** and 0.106 W is the MMCM. The logic yo
 - **4-bit colour.** The VGA DAC and the stored pixel are 4 bits per channel, so the image has at most 4096 colours.
 - **Possible 1 to 2 pixel offset** at the left edge, from the registered VGA read path.
 - **Constraints.** No output delay is set on the VGA pins, and `PCLK` uses a non-dedicated clock route.
+- **Button and LED7 I/O standard.** `btn` and `LED[7]` use `LVTTL` in the XDC. Check the ZedBoard VADJ jumper setting if either behaves oddly.
 - **Not measured.** Frame rate and end-to-end latency.
 
 ---
